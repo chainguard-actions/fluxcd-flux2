@@ -1,6 +1,14 @@
 # fluxcd/flux2
 
-Hardened GitHub Action by [Chainguard](https://www.chainguard.dev).
+Open and extensible continuous delivery solution for Kubernetes. Powered by GitOps Toolkit.
+
+Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at [https://github.com/fluxcd/flux2](https://github.com/fluxcd/flux2).
+
+## Versions
+
+| Version | Tag | Upstream commit |
+|---------|-----|-----------------|
+| action/v2.8.3 | [`action/v2.8.3`](https://github.com/chainguard-actions/fluxcd-flux2/tree/action/v2.8.3) | — |
 
 ## Privacy
 
