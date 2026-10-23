@@ -1,0 +1,30 @@
+name: Test custom bindir
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: 2.4.0
+          bindir: ${{ github.workspace }}/.flux-bin
+      - name: Assert binary installed in custom bindir
+        run: |
+          ls -la "$GITHUB_WORKSPACE/.flux-bin" || true
+          if [ ! -x "$GITHUB_WORKSPACE/.flux-bin/flux" ]; then
+            echo "FAIL: flux not found in custom bindir"
+            exit 1
+          fi
+          P="$(command -v flux)"
+          echo "flux path: $P"
+          if [ "$P" != "$GITHUB_WORKSPACE/.flux-bin/flux" ]; then
+            echo "FAIL: flux on PATH is not the custom bindir one"
+            exit 1
+          fi
+          OUT="$("$GITHUB_WORKSPACE/.flux-bin/flux" -v)"
+          echo "actual: $OUT"
+          echo "$OUT" | grep -q "2.4.0" || { echo "FAIL: wrong version"; exit 1; }
+          echo "PASS"

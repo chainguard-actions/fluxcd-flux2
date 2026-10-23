@@ -1,0 +1,30 @@
+name: Test deprecated arch input is ignored
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: 2.3.0
+          arch: arm
+          bindir: ${{ runner.temp }}/flux-arch-test
+      - name: Assert flux installed for runner arch despite arch input
+        env:
+          BINDIR: ${{ runner.temp }}/flux-arch-test
+        run: |
+          if [ ! -x "$BINDIR/flux" ]; then
+            echo "FAIL: flux binary not found in $BINDIR"
+            exit 1
+          fi
+          out="$("$BINDIR/flux" -v)"
+          echo "flux -v: $out"
+          if ! echo "$out" | grep -q "2.3.0"; then
+            echo "FAIL: expected version 2.3.0"
+            exit 1
+          fi
+          which flux
+          echo "PASS"

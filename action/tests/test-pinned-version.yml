@@ -1,0 +1,30 @@
+name: Test pinned version
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: 2.4.0
+      - name: Assert flux is on PATH with the requested version
+        run: |
+          command -v flux || { echo "FAIL: flux not on PATH"; exit 1; }
+          OUT="$(flux -v)"
+          echo "actual: $OUT"
+          if ! echo "$OUT" | grep -q "2.4.0"; then
+            echo "FAIL: expected version 2.4.0"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert installed into tool cache
+        run: |
+          P="$(command -v flux)"
+          echo "flux path: $P"
+          case "$P" in
+            */flux2/2.4.0/linux/*) echo "PASS" ;;
+            *) echo "FAIL: expected flux under <tool cache>/flux2/2.4.0/linux"; exit 1 ;;
+          esac
