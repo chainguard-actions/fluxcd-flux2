@@ -1,0 +1,33 @@
+name: Test basic pinned version
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: 2.4.0
+      - name: Assert flux installed with expected version
+        run: |
+          command -v flux || { echo "FAIL: flux not on PATH"; exit 1; }
+          OUT="$(flux -v)"
+          echo "actual: $OUT"
+          if [ "$OUT" != "flux version 2.4.0" ]; then
+            echo "FAIL: expected 'flux version 2.4.0'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert plugin-dir output empty without plugins
+        env:
+          ACTUAL: ${{ steps.action.outputs.plugin-dir }}
+        run: |
+          echo "actual: '$ACTUAL'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: expected empty plugin-dir"
+            exit 1
+          fi
+          echo "PASS"

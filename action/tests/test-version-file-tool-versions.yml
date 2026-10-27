@@ -1,0 +1,22 @@
+name: Test .tool-versions version-file
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version-file: ${{ github.workspace }}/tests/fixtures/tv/.tool-versions
+      - name: Assert flux version from .tool-versions
+        run: |
+          OUT="$(flux -v)"
+          echo "actual: $OUT"
+          if [ "$OUT" != "flux version 2.3.0" ]; then
+            echo "FAIL: expected 'flux version 2.3.0'"
+            exit 1
+          fi
+          echo "PASS"

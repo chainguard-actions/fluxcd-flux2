@@ -1,0 +1,34 @@
+name: Test custom bindir
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: 2.4.0
+          bindir: /tmp/custom-flux-bin
+      - name: Assert binary installed in bindir and on PATH
+        run: |
+          BIN="/tmp/custom-flux-bin/flux"
+          if [ ! -x "$BIN" ]; then
+            echo "FAIL: $BIN not found or not executable"
+            exit 1
+          fi
+          FOUND="$(command -v flux || true)"
+          echo "flux on PATH: $FOUND"
+          if [ "$FOUND" != "$BIN" ]; then
+            echo "FAIL: flux on PATH is not from bindir"
+            exit 1
+          fi
+          OUT="$("$BIN" -v)"
+          echo "actual: $OUT"
+          if [ "$OUT" != "flux version 2.4.0" ]; then
+            echo "FAIL: expected 'flux version 2.4.0'"
+            exit 1
+          fi
+          echo "PASS"

@@ -1,0 +1,498 @@
+//go:build unit
+// +build unit
+
+/*
+Copyright 2021 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"context"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/fluxcd/flux2/v2/internal/build"
+	"github.com/fluxcd/pkg/ssa"
+	"github.com/fluxcd/pkg/ssa/normalize"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+func TestDiffKustomization(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       string
+		objectFile string
+		assert     assertFunc
+	}{
+		{
+			name:       "no args",
+			args:       "diff kustomization podinfo",
+			objectFile: "",
+			assert:     assertError("invalid resource path \"\""),
+		},
+		{
+			name:       "diff nothing deployed",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-new-kustomization.golden"),
+		},
+		{
+			name:       "diff with a deployment object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/deployment.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-deployment.golden"),
+		},
+		{
+			name:       "diff with a drifted service object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/service.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-drifted-service.golden"),
+		},
+		{
+			name:       "diff with a drifted secret object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/secret.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-drifted-secret.golden"),
+		},
+		{
+			name:       "diff with a drifted key in sops secret object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/key-sops-secret.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-drifted-key-sops-secret.golden"),
+		},
+		{
+			name:       "diff with a drifted value in sops secret object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/value-sops-secret.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-drifted-value-sops-secret.golden"),
+		},
+		{
+			name:       "diff with a sops dockerconfigjson secret object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/dockerconfigjson-sops-secret.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-dockerconfigjson-sops-secret.golden"),
+		},
+		{
+			name:       "diff with a sops stringdata secret object",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false",
+			objectFile: "./testdata/diff-kustomization/stringdata-sops-secret.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-drifted-stringdata-sops-secret.golden"),
+		},
+		{
+			name:       "diff where kustomization file has multiple objects with the same name",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false --kustomization-file ./testdata/diff-kustomization/flux-kustomization-multiobj.yaml",
+			objectFile: "",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-new-kustomization.golden"),
+		},
+		{
+			name:       "diff with recursive",
+			args:       "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo-with-my-app --progress-bar=false --recursive --local-sources GitRepository/default/podinfo=./testdata/build-kustomization",
+			objectFile: "./testdata/diff-kustomization/my-app.yaml",
+			assert:     assertGoldenFile("./testdata/diff-kustomization/diff-with-recursive.golden"),
+		},
+	}
+
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+	}
+
+	b, _ := build.NewBuilder("podinfo", "", build.WithClientConfig(kubeconfigArgs, kubeclientOptions))
+
+	resourceManager, err := b.Manager()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setup(t, tmpl)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.objectFile != "" {
+				if _, err := resourceManager.ApplyAll(context.Background(), createObjectFromFile(tt.objectFile, tmpl, t), ssa.DefaultApplyOptions()); err != nil {
+					t.Error(err)
+				}
+			}
+			cmd := cmdTestCase{
+				args:   tt.args + " -n " + tmpl["fluxns"],
+				assert: tt.assert,
+			}
+			cmd.runTestCmd(t)
+			if tt.objectFile != "" {
+				testEnv.DeleteObjectFile(tt.objectFile, tmpl, t)
+			}
+		})
+	}
+}
+
+// TestDiffKustomizationNotDeployed tests `flux diff ks` when the Kustomization
+// CR does not exist in the cluster but is provided via --kustomization-file.
+// Reproduces https://github.com/fluxcd/flux2/issues/5439
+func TestDiffKustomizationNotDeployed(t *testing.T) {
+	// Use a dedicated namespace with NO setup() -- the Kustomization CR
+	// intentionally does not exist in the cluster.
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+	}
+	setupTestNamespace(tmpl["fluxns"], t)
+
+	tests := []struct {
+		name   string
+		args   string
+		assert assertFunc
+	}{
+		{
+			name: "fails without --ignore-not-found",
+			args: "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false " +
+				"--kustomization-file ./testdata/diff-kustomization/flux-kustomization-local-only.yaml",
+			assert: assertError("failed to get kustomization object: kustomizations.kustomize.toolkit.fluxcd.io \"podinfo\" not found"),
+		},
+		{
+			name: "succeeds with --ignore-not-found and --kustomization-file",
+			args: "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false " +
+				"--kustomization-file ./testdata/diff-kustomization/flux-kustomization-local-only.yaml " +
+				"--ignore-not-found",
+			assert: assertGoldenFile("./testdata/diff-kustomization/diff-new-kustomization.golden"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := cmdTestCase{
+				args:   tt.args + " -n " + tmpl["fluxns"],
+				assert: tt.assert,
+			}
+			cmd.runTestCmd(t)
+		})
+	}
+}
+
+func TestDiffKustomizationDefaultBuildsAbsolutePathOutsideCwd(t *testing.T) {
+	fluxNS := allocateNamespace("flux-system")
+	targetNS := allocateNamespace("target")
+	setupTestNamespace(fluxNS, t)
+	setupTestNamespace(targetNS, t)
+
+	cwdDir, sourceDir, kustomizationFile := newOutsideCwdKustomization(t, fluxNS, targetNS)
+
+	restore := chdirForTest(t, cwdDir)
+	defer restore()
+
+	flag := diffKsCmd.Flags().Lookup("in-memory-build")
+	if flag == nil {
+		t.Fatal("missing in-memory-build flag")
+	}
+	defaultValue, err := strconv.ParseBool(flag.DefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffKsArgs.inMemoryBuild = defaultValue
+
+	output, err := executeCommand("diff kustomization app --path " + sourceDir +
+		" --kustomization-file " + kustomizationFile +
+		" --ignore-not-found --progress-bar=false -n " + fluxNS)
+	if isChangeError(err) {
+		err = nil
+	}
+	if err != nil {
+		t.Fatalf("expected diff to build with default backend, got: %v", err)
+	}
+	if !strings.Contains(output, "ConfigMap/"+targetNS+"/outside-cwd created") {
+		t.Fatalf("expected created ConfigMap in diff output, got:\n%s", output)
+	}
+}
+
+func TestDiffKustomizationInMemoryBuildsAbsolutePathOutsideCwd(t *testing.T) {
+	fluxNS := allocateNamespace("flux-system")
+	targetNS := allocateNamespace("target")
+	setupTestNamespace(fluxNS, t)
+	setupTestNamespace(targetNS, t)
+
+	cwdDir, sourceDir, kustomizationFile := newOutsideCwdKustomization(t, fluxNS, targetNS)
+
+	restore := chdirForTest(t, cwdDir)
+	defer restore()
+
+	output, err := executeCommand("diff kustomization app --path " + sourceDir +
+		" --kustomization-file " + kustomizationFile +
+		" --ignore-not-found --progress-bar=false -n " + fluxNS +
+		" --in-memory-build=true")
+	if isChangeError(err) {
+		err = nil
+	}
+	if err != nil {
+		t.Fatalf("expected in-memory diff to build outside cwd, got: %v", err)
+	}
+	if !strings.Contains(output, "ConfigMap/"+targetNS+"/outside-cwd created") {
+		t.Fatalf("expected created ConfigMap in diff output, got:\n%s", output)
+	}
+}
+
+// TestDiffKustomizationTakeOwnership tests `flux diff ks` when taking ownership
+// of existing resources on the cluster. A "pre-existing" configmap is applied
+// to the cluster, and the kustomization contains a matching configmap; the
+// diff should show the labels added by flux
+func TestDiffKustomizationTakeOwnership(t *testing.T) {
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+	}
+	setupTestNamespace(tmpl["fluxns"], t)
+
+	b, _ := build.NewBuilder("configmaps", "", build.WithClientConfig(kubeconfigArgs, kubeclientOptions))
+	resourceManager, err := b.Manager()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-create the "existing" configmap in the cluster without Flux labels
+	if _, err := resourceManager.ApplyAll(context.Background(), createObjectFromFile("./testdata/diff-kustomization/existing-configmap.yaml", tmpl, t), ssa.DefaultApplyOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := cmdTestCase{
+		args: "diff kustomization configmaps --path ./testdata/build-kustomization/configmaps --progress-bar=false " +
+			"--kustomization-file ./testdata/diff-kustomization/flux-kustomization-configmaps.yaml " +
+			"--ignore-not-found" +
+			" -n " + tmpl["fluxns"],
+		assert: assertGoldenFile("./testdata/diff-kustomization/diff-taking-ownership.golden"),
+	}
+	cmd.runTestCmd(t)
+}
+
+// TestDiffKustomizationNewNamespaceAndConfigmap runs `flux diff ks` when the
+// kustomization creates a new namespace and resources inside it. The server-side
+// dry-run cannot resolve resources in a namespace that doesn't exist yet,
+// consistent with `kubectl diff --server-side` behavior.
+func TestDiffKustomizationNewNamespaceAndConfigmap(t *testing.T) {
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+	}
+	setupTestNamespace(tmpl["fluxns"], t)
+
+	cmd := cmdTestCase{
+		args: "diff kustomization new-namespace-and-configmap --path ./testdata/build-kustomization/new-namespace-and-configmap --progress-bar=false " +
+			"--kustomization-file ./testdata/diff-kustomization/flux-kustomization-new-namespace-and-configmap.yaml " +
+			"--ignore-not-found" +
+			" -n " + tmpl["fluxns"],
+		assert: func(output string, err error) error {
+			if err := assertError("ConfigMap/new-ns/app-config not found: namespaces \"new-ns\" not found")(output, err); err != nil {
+				return err
+			}
+			return assertGoldenFile("./testdata/diff-kustomization/diff-new-namespace-only.golden")(output, nil)
+		},
+	}
+	cmd.runTestCmd(t)
+}
+
+// TestDiffKustomizationNewNamespaceOnly runs `flux diff ks` when the
+// kustomization creates only a new namespace. The diff should show the
+// namespace as created.
+func TestDiffKustomizationNewNamespaceOnly(t *testing.T) {
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+	}
+	setupTestNamespace(tmpl["fluxns"], t)
+
+	cmd := cmdTestCase{
+		args: "diff kustomization new-namespace-only --path ./testdata/build-kustomization/new-namespace-only --progress-bar=false " +
+			"--kustomization-file ./testdata/diff-kustomization/flux-kustomization-new-namespace-only.yaml " +
+			"--ignore-not-found" +
+			" -n " + tmpl["fluxns"],
+		assert: assertGoldenFile("./testdata/diff-kustomization/diff-new-namespace-only.golden"),
+	}
+	cmd.runTestCmd(t)
+}
+
+func createObjectFromFile(objectFile string, templateValues map[string]string, t *testing.T) []*unstructured.Unstructured {
+	buf, err := os.ReadFile(objectFile)
+	if err != nil {
+		t.Fatalf("Error reading file '%s': %v", objectFile, err)
+	}
+	content, err := executeTemplate(string(buf), templateValues)
+	if err != nil {
+		t.Fatalf("Error evaluating template file '%s': '%v'", objectFile, err)
+	}
+	clientObjects, err := readYamlObjects(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("Error decoding yaml file '%s': %v", objectFile, err)
+	}
+
+	if err := normalize.UnstructuredList(clientObjects); err != nil {
+		t.Fatalf("Error setting native kinds defaults for '%s': %v", objectFile, err)
+	}
+
+	return clientObjects
+}
+
+// TestDiffKustomizationDriftIgnoreRules tests `flux diff ks` with drift ignore
+// rules. A service with a drifted port is pre-applied to the cluster, and the
+// kustomization specifies driftIgnoreRules that ignore /spec/ports on Services.
+// The diff should not show the service as drifted.
+func TestDiffKustomizationDriftIgnoreRules(t *testing.T) {
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+	}
+	setupTestNamespace(tmpl["fluxns"], t)
+
+	b, _ := build.NewBuilder("podinfo", "", build.WithClientConfig(kubeconfigArgs, kubeclientOptions))
+	resourceManager, err := b.Manager()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-apply the drifted service (port 9899 instead of 9898) without Flux labels.
+	if _, err := resourceManager.ApplyAll(context.Background(), createObjectFromFile("./testdata/diff-kustomization/drifted-service-no-labels.yaml", tmpl, t), ssa.DefaultApplyOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := cmdTestCase{
+		args: "diff kustomization podinfo --path ./testdata/build-kustomization/podinfo --progress-bar=false " +
+			"--kustomization-file ./testdata/diff-kustomization/flux-kustomization-drift-ignore.yaml " +
+			"--ignore-not-found" +
+			" -n " + tmpl["fluxns"],
+		assert: assertGoldenFile("./testdata/diff-kustomization/diff-with-drift-ignore.golden"),
+	}
+	cmd.runTestCmd(t)
+
+	testEnv.DeleteObjectFile("./testdata/diff-kustomization/drifted-service-no-labels.yaml", tmpl, t)
+}
+
+func TestDiffKustomizationPruning(t *testing.T) {
+	const group = "kustomize.toolkit.fluxcd.io/"
+	tests := []struct {
+		name         string
+		args         string
+		labels       map[string]string
+		annotations  map[string]string
+		missing      bool
+		disablePrune bool
+		wantAction   string
+	}{
+		{
+			name:       "owned object",
+			wantAction: "deleted",
+		},
+		{
+			name:       "local kustomization without namespace",
+			args:       " --kustomization-file ./testdata/diff-kustomization/flux-kustomization-pruning.yaml",
+			wantAction: "deleted",
+		},
+		{
+			name:        "prune disabled annotation",
+			annotations: map[string]string{group + "prune": "disabled"},
+			wantAction:  "skipped",
+		},
+		{
+			name:       "reconcile disabled label",
+			labels:     map[string]string{group + "reconcile": "disabled"},
+			wantAction: "skipped",
+		},
+		{
+			name:        "SSA ignore annotation",
+			annotations: map[string]string{group + "ssa": "Ignore"},
+			wantAction:  "skipped",
+		},
+		{
+			name:       "different owner name",
+			labels:     map[string]string{group + "name": "other"},
+			wantAction: "skipped",
+		},
+		{
+			name:       "different owner namespace",
+			labels:     map[string]string{group + "namespace": "other"},
+			wantAction: "skipped",
+		},
+		{
+			name:       "missing object",
+			missing:    true,
+			wantAction: "deleted",
+		},
+		{
+			name:         "pruning disabled",
+			disablePrune: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := map[string]string{
+				"fluxns": allocateNamespace("flux-system"),
+				"prune":  strconv.FormatBool(!tt.disablePrune),
+				"action": tt.wantAction,
+			}
+			setupTestNamespace(tmpl["fluxns"], t)
+			testEnv.CreateObjectFile("./testdata/diff-kustomization/pruning-kustomization.yaml", tmpl, t)
+
+			obj := createObjectFromFile("./testdata/diff-kustomization/pruned-configmap.yaml", tmpl, t)[0]
+			labels := obj.GetLabels()
+			for key, value := range tt.labels {
+				labels[key] = value
+			}
+			obj.SetLabels(labels)
+			obj.SetAnnotations(tt.annotations)
+			if !tt.missing {
+				if err := testEnv.CreateObjects([]*unstructured.Unstructured{obj}, t); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Check the exit status before comparing output, as cmdTestCase discards change errors.
+			output, err := executeCommand("diff kustomization pruning --path ./testdata/diff-kustomization/empty --progress-bar=false -n " + tmpl["fluxns"] + tt.args)
+			if got, want := isChangeError(err), tt.wantAction == "deleted"; got != want {
+				t.Fatalf("expected changed=%v, got error: %v\n%s", want, err, output)
+			}
+			if isChangeError(err) {
+				err = nil
+			}
+			assert := assertGoldenTemplateFile("./testdata/diff-kustomization/diff-pruning.golden", tmpl)
+			if tt.disablePrune {
+				assert = assertGoldenValue("")
+			}
+			if err := assert(output, err); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestDiffKustomizationPruningForbidden(t *testing.T) {
+	user, groups := *kubeconfigArgs.Impersonate, *kubeconfigArgs.ImpersonateGroup
+	t.Cleanup(func() {
+		*kubeconfigArgs.Impersonate = user
+		*kubeconfigArgs.ImpersonateGroup = groups
+	})
+
+	tmpl := map[string]string{
+		"fluxns": allocateNamespace("flux-system"),
+		"prune":  "true",
+	}
+	setupTestNamespace(tmpl["fluxns"], t)
+	testEnv.CreateObjectFile("./testdata/diff-kustomization/pruning-kustomization.yaml", tmpl, t)
+	testEnv.CreateObjectFile("./testdata/diff-kustomization/pruned-configmap.yaml", tmpl, t)
+	testEnv.CreateObjectFile("./testdata/diff-kustomization/pruning-rbac.yaml", tmpl, t)
+
+	output, err := executeCommand("diff kustomization pruning --path ./testdata/diff-kustomization/empty --progress-bar=false --as=pruning --as-group=system:authenticated -n " + tmpl["fluxns"])
+	if reqErr, ok := err.(*RequestError); !ok || reqErr.StatusCode != 2 {
+		t.Fatalf("expected a request error with exit code 2, got: %v\n%s", err, output)
+	}
+	if !strings.Contains(err.Error(), "ConfigMap/"+tmpl["fluxns"]+"/pruned query failed:") || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected a forbidden ConfigMap lookup, got: %v", err)
+	}
+	if strings.Contains(output, " deleted") {
+		t.Fatalf("reported a deletion without reading the live object:\n%s", output)
+	}
+}

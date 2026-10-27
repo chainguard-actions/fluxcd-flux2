@@ -1,0 +1,44 @@
+name: Test plugin-dir is ignored when no plugins are requested
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: 2.4.0
+          plugin-dir: ${{ runner.temp }}/custom-flux-plugins
+      - name: Assert flux installed
+        run: |
+          command -v flux || { echo "FAIL: flux not on PATH"; exit 1; }
+          OUT="$(flux -v)"
+          echo "actual: $OUT"
+          if [ "$OUT" != "flux version 2.4.0" ]; then
+            echo "FAIL: expected 'flux version 2.4.0'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert plugin-dir was not used
+        env:
+          ACTUAL: ${{ steps.action.outputs.plugin-dir }}
+          DIR: ${{ runner.temp }}/custom-flux-plugins
+        run: |
+          echo "output: '$ACTUAL'"
+          echo "FLUXCD_PLUGINS: '${FLUXCD_PLUGINS:-}'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: expected empty plugin-dir output"
+            exit 1
+          fi
+          if [ -n "${FLUXCD_PLUGINS:-}" ]; then
+            echo "FAIL: FLUXCD_PLUGINS should not be exported without plugins"
+            exit 1
+          fi
+          if [ -d "$DIR" ]; then
+            echo "FAIL: plugin dir should not be created without plugins"
+            exit 1
+          fi
+          echo "PASS"

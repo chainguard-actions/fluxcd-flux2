@@ -1,0 +1,26 @@
+name: Test version with v prefix
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+      - id: action
+        uses: .
+        with:
+          version: v2.3.0
+      - name: Assert flux version
+        run: |
+          OUT="$(flux -v)"
+          echo "actual: $OUT"
+          if [ "$OUT" != "flux version 2.3.0" ]; then
+            echo "FAIL: expected 'flux version 2.3.0'"
+            exit 1
+          fi
+          FOUND="$(command -v flux)"
+          case "$FOUND" in
+            */flux2/2.3.0/*) echo "PASS: installed to tool cache path $FOUND" ;;
+            *) echo "FAIL: unexpected path $FOUND"; exit 1 ;;
+          esac
