@@ -10,6 +10,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 |---------|-----|-----------------|------------------|
 | action/v2.8.3 | [`action/v2.8.3`](https://github.com/chainguard-actions/fluxcd-flux2/tree/action/v2.8.3) | — | — |
 | v2.10.0 | [`v2.10.0`](https://github.com/chainguard-actions/fluxcd-flux2/tree/v2.10.0) | — | [`action`](https://github.com/chainguard-actions/fluxcd-flux2/blob/v2.10.0/action/HARDENING.md) |
+| v2.10.1 | [`v2.10.1`](https://github.com/chainguard-actions/fluxcd-flux2/tree/v2.10.1) | — | [`action`](https://github.com/chainguard-actions/fluxcd-flux2/blob/v2.10.1/action/HARDENING.md) |
 | v2.8.3 | [`v2.8.3`](https://github.com/chainguard-actions/fluxcd-flux2/tree/v2.8.3) | [`871be9b`](https://github.com/fluxcd/flux2/commit/871be9b40d53627786d3a3835a3ddba1e3234bd2) | [`action`](https://github.com/chainguard-actions/fluxcd-flux2/blob/v2.8.3/action/HARDENING.md) |
 
 ## Privacy
