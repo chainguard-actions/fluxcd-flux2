@@ -1,0 +1,59 @@
+/*
+Copyright 2020 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"fmt"
+	"io"
+
+	"k8s.io/cli-runtime/pkg/printers"
+)
+
+type stderrLogger struct {
+	stderr io.Writer
+}
+
+// escape renders the message and escapes terminal control characters so that
+// free-form text echoed from object statuses, events or controller errors
+// cannot rewrite or hide output on the operator's terminal.
+func escape(format string, a ...interface{}) string {
+	return printers.EscapeTerminal(fmt.Sprintf(format, a...))
+}
+
+func (l stderrLogger) Actionf(format string, a ...interface{}) {
+	fmt.Fprintln(l.stderr, `►`, escape(format, a...))
+}
+
+func (l stderrLogger) Generatef(format string, a ...interface{}) {
+	fmt.Fprintln(l.stderr, `✚`, escape(format, a...))
+}
+
+func (l stderrLogger) Waitingf(format string, a ...interface{}) {
+	fmt.Fprintln(l.stderr, `◎`, escape(format, a...))
+}
+
+func (l stderrLogger) Successf(format string, a ...interface{}) {
+	fmt.Fprintln(l.stderr, `✔`, escape(format, a...))
+}
+
+func (l stderrLogger) Warningf(format string, a ...interface{}) {
+	fmt.Fprintln(l.stderr, `⚠️`, escape(format, a...))
+}
+
+func (l stderrLogger) Failuref(format string, a ...interface{}) {
+	fmt.Fprintln(l.stderr, `✗`, escape(format, a...))
+}

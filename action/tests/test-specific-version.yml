@@ -1,0 +1,50 @@
+name: Test specific version
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Populate workspace with the action if it is missing
+        run: |
+          set -euo pipefail
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE" || true
+          if [ -f "$GITHUB_WORKSPACE/action/action.yml" ]; then
+            echo "action/action.yml already present; using it as-is"
+            exit 0
+          fi
+          mkdir -p "$GITHUB_WORKSPACE"
+          if curl -fsSL https://codeload.github.com/fluxcd/flux2/tar.gz/refs/tags/v2.10.1 \
+              | tar xz --strip-components=1 -C "$GITHUB_WORKSPACE" flux2-2.10.1/action; then
+            echo "fetched action via tarball"
+          else
+            tmp="$(mktemp -d)"
+            git clone --depth 1 --branch v2.10.1 https://github.com/fluxcd/flux2 "$tmp/flux2"
+            cp -r "$tmp/flux2/action" "$GITHUB_WORKSPACE/action"
+          fi
+          ls -la "$GITHUB_WORKSPACE/action"
+          test -f "$GITHUB_WORKSPACE/action/action.yml"
+      - id: action
+        uses: .
+        with:
+          version: 2.0.0
+      - name: Assert flux version
+        run: |
+          OUT="$(flux -v)"
+          echo "actual: $OUT"
+          if ! echo "$OUT" | grep -q "2.0.0"; then
+            echo "FAIL: expected flux version 2.0.0"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert plugin-dir output empty when no plugins
+        env:
+          ACTUAL: ${{ steps.action.outputs.plugin-dir }}
+        run: |
+          echo "actual: '$ACTUAL'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: expected empty plugin-dir"
+            exit 1
+          fi
+          echo "PASS"
